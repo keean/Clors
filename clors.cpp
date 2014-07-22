@@ -1286,7 +1286,7 @@ class term_parser : public fparse {
 
     atoms names = {
         make_pair("np", ast.new_type_atom("np")),
-        make_pair("the", ast.new_type_atom("the"))
+        make_pair("yes", ast.new_type_atom("yes"))
     };
 
 public:
@@ -1436,7 +1436,7 @@ public:
         for (vector<type_struct*> &goal : goals) {
             for (int i = 0; i < count; ++i) {
                 solver solve(names, env, ast.new_type_clause(ast.new_type_struct(
-                    ast.new_type_atom("the"), gv(goal)), set<type_variable*> {}, goal));
+                    names.find("yes")->second, gv(goal)), set<type_variable*> {}, goal));
                 //solver2 solve(ast, env, ast.new_type_clause(ast.new_type_struct("goal", gv(goal)), set<type_variable*> {}, goal));
                 answer = solve.get();
                 if (i + 1 < count) {
