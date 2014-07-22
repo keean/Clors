@@ -757,9 +757,9 @@ public:
         visited.clear();
         cycle_free = true;
         find(t)->accept(this);
-        if (cycle_free == false) {
-            cout << "CYCLIC ";
-        }
+        //if (cycle_free == false) {
+        //    cout << "CYCLIC ";
+        //}
         return cycle_free;
     }
 };
@@ -1135,18 +1135,21 @@ class solver : public source {
     int const trail_checkpoint;
     int const env_checkpoint;
     vector<unique_ptr<source>> or_stack;
+    int const max_depth;
 
 public:
     solver(const solver&) = delete;
     solver(solver&&) = default;
     solver& operator= (const solver&) = delete;
 
-    solver(atoms &names, env_type &env, type_clause *goal) 
+    solver(atoms &names, env_type &env, type_clause *goal, int d) 
     : id(++next_id)
     , cxt(names, env)
     , trail_checkpoint(cxt.unify.checkpoint())
-    , env_checkpoint(cxt.ast.checkpoint()) {
-        profile p;
+    , env_checkpoint(cxt.ast.checkpoint())
+    , max_depth(d)
+    {
+        depth_profile p(max_depth);
         or_stack.emplace_back(new unfolder(cxt, goal));
         //cout << "SOLVER " << id << " CONS\n";
     }
@@ -1166,6 +1169,9 @@ public:
             next_goal = src.get();
             //cout << "SOLVER GOT\n";
             if (next_goal != nullptr) {
+                //cout << "[" << or_stack.size() << "] ";
+                //(type_show {}) (next_goal);
+                //cout << "\n";
                 //cout << "SUCC\n";
                 if (next_goal->impl.empty()) {
                     cout << "PROOF:\n";
@@ -1182,7 +1188,9 @@ public:
                 //    or_stack.pop_back();
                     //cout << "[" << or_stack.size() << "] LCO\n";
                 //}
-                or_stack.emplace_back(new unfolder(cxt, next_goal));
+                if (or_stack.size() + next_goal->impl.size() <= max_depth) {
+                    or_stack.emplace_back(new unfolder(cxt, next_goal));
+                } 
             } else {
                 //cout << "FAIL\n";
                 or_stack.pop_back(); 
@@ -1195,12 +1203,15 @@ public:
         or_stack.clear();
         cxt.unify.backtrack(trail_checkpoint);
         cxt.ast.backtrack(env_checkpoint);
+        return nullptr;
+        /*
         next_goal = cxt.ast.new_type_clause(
             cxt.ast.new_type_struct(cxt.names.find("np")->second, vector<type_expression*> {}),
             set<type_variable*> {},
             vector<type_struct*> {}
         );
         return next_goal;
+        */
     }
 
     virtual void stop() override {
@@ -1242,12 +1253,13 @@ type_clause* unfolder::get() {
             cxt.unify.unify_goal_rule(first, fresh);
             vector<type_struct*> impl(fresh->impl.begin(), fresh->impl.end());
             impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
-            /*type_show ts;
-            cout << "\nIMPL:\n";
-            for (auto i = goal->impl.begin(); i != goal->impl.end(); ++i) {
-                ts(*i);
-                cout << "\n";
-            }*/
+            //type_show ts;
+            //ts(clause);
+            //cout << "\nIMPL:\n";
+            //for (auto i = goal->impl.begin(); i != goal->impl.end(); ++i) {
+            //    ts(*i);
+            //    cout << "\n";
+            //}
             //cout <<"\n";
             return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl));
         } /*else {
@@ -1418,7 +1430,7 @@ public:
             vmap.clear();
         } while (!accept(is_eof));
 
-        /* 
+        ///*
         for (auto const& fun : env) {
             for (auto const& c : fun.second) {
                 show_type(c);
@@ -1426,34 +1438,30 @@ public:
             }
         }
         cout << "\n";
-        */
+        //*/
 
         get_variables gv;
         type_expression *answer;
         //int const count = 100;
-        int const count = 1;
+        int const count = 100;
         context cxt(names, env);
         for (vector<type_struct*> &goal : goals) {
             for (int i = 0; i < count; ++i) {
                 solver solve(names, env, ast.new_type_clause(ast.new_type_struct(
-                    names.find("yes")->second, gv(goal)), set<type_variable*> {}, goal));
-                //solver2 solve(ast, env, ast.new_type_clause(ast.new_type_struct("goal", gv(goal)), set<type_variable*> {}, goal));
+                    names.find("yes")->second, gv(goal)), set<type_variable*> {}, goal), i + 1);
                 answer = solve.get();
-                if (i + 1 < count) {
+                if (answer != nullptr) {
+                    //cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
+                    show_type(answer);
+                    cout << "\n\n";
                     solve.stop();
-                } else {
-                    if (answer != nullptr) {
-                        cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
-                        //cout << "YES\n\n";
-                        show_type(answer);
-                        cout << "\n\n";
-                    } else {
-                        cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
-                        //cout << "NP\n\n";
-                        cout << "ERROR\n\n";
-                    }
+                    goto next;
                 }
+                solve.stop();
             }
+            //cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
+            cout << "NP\n\n";
+        next: continue;
         }
     }
 };
