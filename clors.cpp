@@ -281,7 +281,7 @@ struct ast {
     virtual ~ast() {};
 };
 
-typedef vector<pair<type_expression *const, bool const>> union_stack;
+using union_stack = vector<pair<type_expression *const, bool const>>;
 
 class type_expression : public ast {
     type_expression *canonical;
@@ -397,9 +397,10 @@ class type_clause : public type_expression {
 
 public:
     template <typename T, typename U>
-    type_clause(type_struct *head, T&& cyck, U&& impl)
-        : head(head), cyck(forward<T>(cyck)), impl(forward<U>(impl)) {}
+    type_clause(type_struct *head, T&& cyck, U&& impl, int id)
+        : head(head), cyck(forward<T>(cyck)), impl(forward<U>(impl)), id(id) {}
 
+    int const id;
     type_struct *const head;
     set<type_variable*> const cyck;
     vector<type_struct*> const impl;
@@ -478,8 +479,8 @@ public:
     }
 
     template <typename T, typename U>
-    type_clause* new_type_clause(type_struct *head, T&& cyck, U&& goals) {
-        unique_ptr<type_clause> u(new type_clause(head, forward<T>(cyck), forward<U>(goals)));
+    type_clause* new_type_clause(type_struct *head, T&& cyck, U&& goals, int id = 0) {
+        unique_ptr<type_clause> u(new type_clause(head, forward<T>(cyck), forward<U>(goals), id));
         type_clause *const t = u.get();
         region.emplace_back(move(u));
         return t;
@@ -497,8 +498,8 @@ public:
 // Show Type Graph - assumes no cycles
 
 class var_map {
-    typedef map<type_variable*, int> map_type;
-    typedef map<string, int> map_name;
+    using map_type = map<type_variable*, int>;
+    using map_name = map<string, int>;
     map_type tmap;
     map_name nmap;
 
@@ -561,6 +562,7 @@ public:
     }
 
     virtual void visit(type_clause *const t) override {
+        cout << t->id << ". ";
         t->head->accept(this);
         if (t->cyck.size() > 0) {
             cout << " [";
@@ -614,7 +616,7 @@ public:
 // Get Vars - assumes no cycles
 
 class get_variables : public type_visitor {
-    typedef set<type_variable*> tvars_type;
+    using tvars_type = set<type_variable*>;
 
     tvars_type tvars;
 
@@ -655,7 +657,7 @@ public:
 // Instantiate Type - assumes no cycles
 
 class type_instantiate : public type_visitor {
-    typedef map<type_variable*, type_variable*> tvar_map_type;
+    using tvar_map_type = map<type_variable*, type_variable*>;
 
     heap& ast;
     tvar_map_type tvar_map;
@@ -671,20 +673,28 @@ class type_instantiate : public type_visitor {
     }
 
 public:
-    type_clause* inst_rule(type_clause *const t) {
+    type_clause* inst_rule(
+        type_struct *const h,
+        set<type_variable*> const& c,
+        vector<type_struct*> const& i,
+        int d
+    ) {
         tvar_map.clear();
-        type_struct *const head = inst_struct(t->head);
+        type_struct *const head = inst_struct(h);
         set<type_variable*> cyck;
-        for (type_variable *const v : t->cyck) {
-            cyck.insert(tvar_map.find(v)->second);
+        for (type_variable *const v : c) {
+            tvar_map_type::const_iterator j = tvar_map.find(v);
+            if (j != tvar_map.end()) {
+                cyck.insert(j->second);
+            }
         }
         vector<type_struct*> impl;
-        for (type_struct *const s : t->impl) {
+        for (type_struct *const s : i) {
             impl.push_back(inst_struct(s));
         }
-        return ast.new_type_clause(head, move(cyck), move(impl));
+        return ast.new_type_clause(head, move(cyck), move(impl), d);
     }
-    
+
     virtual void visit(type_variable *const t) override {
         tvar_map_type::iterator const i = tvar_map.find(t);
         if (i == tvar_map.end()) { // fresh type variable
@@ -705,7 +715,7 @@ public:
     }
 
     virtual void visit(type_clause *const t) override {
-        exp = inst_rule(t);
+        exp = inst_rule(t->head, t->cyck, t->impl, t->id);
     }
 
     virtual void visit(type_source *const t) override {}
@@ -768,11 +778,10 @@ public:
 // Rational Tree Unification
 
 class trail : public type_visitor {
-    typedef pair<type_expression*, type_expression*> texp_pair;
+    using texp_pair = pair<type_expression*, type_expression*>;
     no_cycles nocyc;
 
     union_stack unions;
-    set<texp_pair> done;
     vector<texp_pair> todo;
 
     type_expression *u2;
@@ -784,14 +793,11 @@ class trail : public type_visitor {
         }
     }
 
-    void struct_struct(type_struct *const t1, type_struct *const t2) {
+    inline void struct_struct(type_struct *const t1, type_struct *const t2) {
         if ((t1->functor == t2->functor) && (t1->args.size() == t2->args.size())) {
-            if (done.emplace(t1, t2).second) {
-                for (int i = 0; i < t1->args.size(); ++i) {
-                    queue(t1->args[i], t2->args[i]);
-                }
-            } else {
-                cout << "CYCLIC-UNIFICATION ";
+            link(t1, t2, unions);
+            for (int i = 0; i < t1->args.size(); ++i) {
+                queue(t1->args[i], t2->args[i]);
             }
         } else {
             unifies = false;
@@ -971,6 +977,7 @@ public:
     explicit trail() : variable(*this), atom(*this), strct(*this),
         rule(*this), source(*this) {}
 
+private:
     bool unify() {
         unifies = true;
 
@@ -987,22 +994,23 @@ public:
         return unifies;
     }
 
+public:
+    /*
     bool unify_exp_exp(type_expression *const x, type_expression *const y) {
-        done.clear();
         todo.clear();
         todo.push_back(make_pair(x, y));
 
-        /*type_show ts;
-        ts(x);
-        cout << " <U> ";
-        ts(y);
-        cout << "\n";*/
+        //type_show ts;
+        //ts(x);
+        //cout << " <U> ";
+        //ts(y);
+        //cout << "\n";
 
         return unify();
     }
+    */
 
     bool unify_goal_rule(type_struct *const g, type_clause *const r) {
-        done.clear();
         todo.clear();
         struct_struct(g, r->head);
 
@@ -1064,8 +1072,6 @@ struct context {
     heap ast;
     trail unify;
     type_instantiate inst;
-    vector<type_atom*> N;
-    vector<type_atom*> P;
 
     context(atoms &names, env_type &env)
         : names(names), env(env), inst(ast) {}
@@ -1082,41 +1088,43 @@ class unfolder : public source {
     // builtin_unknown is unsound.
 
     context &cxt;
-    type_clause *fresh;
     type_clause *goal;
+    type_clause *fresh;
     vector<type_clause*>::iterator begin;
     vector<type_clause*>::iterator end;
     int const trail_checkpoint;
     int const env_checkpoint;
-    bool found;
 
 public:
+    int const depth;
+
     unfolder(const unfolder&) = delete;
     unfolder(unfolder&&) = default;
     unfolder& operator= (const unfolder&) = delete;
 
-    unfolder(context &cxt, type_clause *g)
+    unfolder(context &cxt, type_clause *g, int d)
     : cxt(cxt)
     , goal(g)
     , begin()
     , end()
     , trail_checkpoint(cxt.unify.checkpoint())
-    , env_checkpoint(cxt.ast.checkpoint()) {
+    , env_checkpoint(cxt.ast.checkpoint())
+    , depth(d) {
         type_struct *first = goal->impl.front();
         env_type::iterator i = cxt.env.find(first->functor);
         if (i != cxt.env.end()) {
             begin = i->second.begin();
             end = i->second.end();
-            found = true;
-        } else {
-            found = false;
         }
     }
 
     virtual type_clause* get() override;
 
     virtual type_clause* reget() override {
-        return goal;
+        //return goal;
+        return fresh;
+        //return clause;
+        //return history;
     }
 
     virtual bool at_end() override {
@@ -1134,8 +1142,10 @@ class solver : public source {
     context cxt;
     int const trail_checkpoint;
     int const env_checkpoint;
-    vector<unique_ptr<source>> or_stack;
+    //vector<unique_ptr<source>> or_stack;
+    vector<unique_ptr<unfolder>> or_stack;
     int const max_depth;
+    int depth;
 
 public:
     solver(const solver&) = delete;
@@ -1149,8 +1159,8 @@ public:
     , env_checkpoint(cxt.ast.checkpoint())
     , max_depth(d)
     {
-        depth_profile p(max_depth);
-        or_stack.emplace_back(new unfolder(cxt, goal));
+        //depth_profile p(max_depth);
+        or_stack.emplace_back(new unfolder(cxt, goal, 0));
         //cout << "SOLVER " << id << " CONS\n";
     }
 
@@ -1162,10 +1172,11 @@ public:
     type_clause *next_goal;
 
     type_clause* get() override {
-        profile p;
+        depth_profile p(max_depth);
         //cout << "SOLVER GET\n";
         while (!or_stack.empty()) {
-            source &src = *(or_stack.back());
+            //source &src = *(or_stack.back());
+            unfolder &src = *(or_stack.back());
             next_goal = src.get();
             //cout << "SOLVER GOT\n";
             if (next_goal != nullptr) {
@@ -1177,9 +1188,13 @@ public:
                     cout << "PROOF:\n";
                     type_show ts;
                     for (auto i = or_stack.begin(); i != or_stack.end(); ++i) {
-                        if ((*i)->reget()->impl.size() > 0) {
-                            ts((*i)->reget()->impl.front());
-                        }
+                        type_clause *t = (*i)->reget();
+                        //if (t->impl.size() > 0) {
+                            //cout << "<" << (*i)->depth << ">";
+                            //ts(t->head);
+                            //ts((*i)->reget());
+                            ts(t);
+                        //}
                         cout << "\n";
                     }
                     return next_goal;
@@ -1189,7 +1204,7 @@ public:
                     //cout << "[" << or_stack.size() << "] LCO\n";
                 //}
                 if (or_stack.size() + next_goal->impl.size() <= max_depth) {
-                    or_stack.emplace_back(new unfolder(cxt, next_goal));
+                    or_stack.emplace_back(new unfolder(cxt, next_goal, depth));
                 } 
             } else {
                 //cout << "FAIL\n";
@@ -1239,34 +1254,18 @@ type_clause* unfolder::get() {
     cxt.unify.backtrack(trail_checkpoint);
     cxt.ast.backtrack(env_checkpoint);
     type_struct *const first = goal->impl.front();
-    //cout << "UNFOLDER GET\n";
-    
-    //if (!found) {
-        // any builtins...
-    //}
 
-    while (found && (begin != end)) {
-        type_clause *const clause = *(begin++);
+    while (begin != end) {
+        type_clause* clause = *(begin++);
         if (cxt.unify.match_goal_rule(first, clause)) {
-            //cout << "MATCH\n";
-            fresh = cxt.inst.inst_rule(clause);
+            fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
             cxt.unify.unify_goal_rule(first, fresh);
             vector<type_struct*> impl(fresh->impl.begin(), fresh->impl.end());
             impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
-            //type_show ts;
-            //ts(clause);
-            //cout << "\nIMPL:\n";
-            //for (auto i = goal->impl.begin(); i != goal->impl.end(); ++i) {
-            //    ts(*i);
-            //    cout << "\n";
-            //}
-            //cout <<"\n";
-            return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl));
-        } /*else {
-            cout << "NO MATCH\n";
-        }*/
+            return cxt.ast.new_type_clause(goal->head,set<type_variable*> {}, move(impl), clause->id);
+        }
     }
-    //cout << "EMPTY\n";
+
     return nullptr;
 }
 
@@ -1295,6 +1294,7 @@ class term_parser : public fparse {
     heap& ast;
     set<type_variable*> repeated;
     map<string, type_variable*> vmap;
+    int clause_id;
 
     atoms names = {
         make_pair("np", ast.new_type_atom("np")),
@@ -1399,10 +1399,10 @@ public:
             impl = parse_structs();
         } 
         expect(is_dot);
-        return ast.new_type_clause(head, move(cyck), move(impl));
+        return ast.new_type_clause(head, move(cyck), move(impl), ++clause_id);
     }
 
-    explicit term_parser(heap &ast) : ast(ast) {}
+    explicit term_parser(heap &ast) : ast(ast), clause_id(0) {}
 
     void operator() (fstream *f) {
         env_type env;
@@ -1441,7 +1441,7 @@ public:
         //*/
 
         get_variables gv;
-        type_expression *answer;
+        type_clause *answer;
         //int const count = 100;
         int const count = 100;
         context cxt(names, env);
@@ -1452,7 +1452,8 @@ public:
                 answer = solve.get();
                 if (answer != nullptr) {
                     //cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
-                    show_type(answer);
+                    cout << "\n";
+                    show_type(answer->head);
                     cout << "\n\n";
                     solve.stop();
                     goto next;
