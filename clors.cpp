@@ -248,26 +248,6 @@ using env_type = map<type_atom*, vector<type_clause*>>;
 using atoms = map<string, type_atom*>;
 
 //----------------------------------------------------------------------------
-// Fluent
-
-struct fluent {
-    virtual ~fluent() {}
-};
-
-struct source : public fluent {
-    virtual type_clause* get() = 0;
-    virtual type_clause* reget() = 0;
-    virtual void stop() {} 
-    virtual bool at_end() {
-        return true;
-    }
-};
-
-struct sink : public fluent {
-    virtual void put(type_expression*) = 0;
-};
-
-//----------------------------------------------------------------------------
 // Expression Graph
 
 struct ast {
@@ -994,7 +974,7 @@ struct context {
     context& operator=(const context&) = default;
 };
 
-class unfolder : public source {
+class unfolder {
     static string const builtin_answer_source;
     static string const builtin_get;
     static string const builtin_stop;
@@ -1033,16 +1013,16 @@ public:
         }
     }
 
-    virtual type_clause* get() override;
+    type_clause* get();
 
-    virtual type_clause* reget() override {
+    type_clause* reget() {
         //return goal;
         return fresh;
         //return clause;
         //return history;
     }
 
-    virtual bool at_end() override {
+    bool at_end() {
         return begin == end;
     }
 };
@@ -1050,14 +1030,13 @@ public:
 //----------------------------------------------------------------------------
 // Transitive Closure
 
-class solver : public source {
+class solver {
     static int next_id;
     int const id;
 
     context cxt;
     int const trail_checkpoint;
     int const env_checkpoint;
-    //vector<unique_ptr<source>> or_stack;
     vector<unique_ptr<unfolder>> or_stack;
     int const max_depth;
     int depth;
@@ -1079,18 +1058,17 @@ public:
         //cout << "SOLVER " << id << " CONS\n";
     }
 
-    ~solver() override {
+    ~solver() {
         //cout << "SOLVER " << id << " DEST\n";
         stop();
     }
 
     type_clause *next_goal;
 
-    type_clause* get() override {
+    type_clause* get() {
         depth_profile p(max_depth);
         //cout << "SOLVER GET\n";
         while (!or_stack.empty()) {
-            //source &src = *(or_stack.back());
             unfolder &src = *(or_stack.back());
             next_goal = src.get();
             //cout << "SOLVER GOT\n";
@@ -1144,18 +1122,18 @@ public:
         */
     }
 
-    virtual void stop() override {
+    virtual void stop() {
         //cout << "SOLVER " << id << " STOP\n";
         or_stack.clear();
         cxt.unify.backtrack(trail_checkpoint);
         cxt.ast.backtrack(env_checkpoint);
     }
 
-    type_clause* reget() override {
+    type_clause* reget() {
         return next_goal;
     }
 
-    virtual bool at_end() override {
+    virtual bool at_end() {
         return or_stack.empty();
     }
 };
