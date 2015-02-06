@@ -243,13 +243,6 @@ class type_variable;
 class type_atom;
 class type_struct;
 class type_clause;
-class type_source;
-
-enum class kleene3 {
-    k3_true,
-    k3_false,
-    k3_unknown
-};
 
 using env_type = map<type_atom*, vector<type_clause*>>;
 using atoms = map<string, type_atom*>;
@@ -408,30 +401,17 @@ public:
     virtual void accept(class type_visitor *v) override;
 };
 
-class type_source : public type_expression {
-    friend class heap;
-
-public:
-    type_source(source *const s) : src(s) {}
-    unique_ptr<source> const src;
-    //source* const src;
-
-    virtual void accept(class type_visitor *v) override;
-};
-
 struct type_visitor {
     virtual void visit(type_variable *t) = 0;
     virtual void visit(type_atom *t) = 0;
     virtual void visit(type_struct *t) = 0;
     virtual void visit(type_clause *t) = 0;
-    virtual void visit(type_source *t) = 0;
 };
 
 void type_variable::accept(class type_visitor *v) {v->visit(this);}
 void type_atom::accept(class type_visitor *v) {v->visit(this);}
 void type_struct::accept(class type_visitor *v) {v->visit(this);}
 void type_clause::accept(class type_visitor *v) {v->visit(this);}
-void type_source::accept(class type_visitor *v) {v->visit(this);}
 
 //----------------------------------------------------------------------------
 // Heap : The Global Stack
@@ -482,13 +462,6 @@ public:
     type_clause* new_type_clause(type_struct *head, T&& cyck, U&& goals, int id = 0) {
         unique_ptr<type_clause> u(new type_clause(head, forward<T>(cyck), forward<U>(goals), id));
         type_clause *const t = u.get();
-        region.emplace_back(move(u));
-        return t;
-    }
-
-    type_source* new_type_source(source *src) {
-        unique_ptr<type_source> u(new type_source(src));
-        type_source *const t = u.get();
         region.emplace_back(move(u));
         return t;
     }
@@ -586,10 +559,6 @@ public:
         }
     }
 
-    virtual void visit(type_source *const t) override {
-        cout << "<source: " << t->src.get() << ">";
-    }
-
     explicit type_show(bool debug = false) : debug(debug) {}
 
     void operator() (type_expression *const t) {
@@ -639,8 +608,6 @@ public:
             find(u)->accept(this);
         }
     }
-
-    virtual void visit(type_source *const t) override {}
 
     vector<type_expression*> operator() (vector<type_struct *> const ts) {
         tvars.clear();
@@ -718,8 +685,6 @@ public:
         exp = inst_rule(t->head, t->cyck, t->impl, t->id);
     }
 
-    virtual void visit(type_source *const t) override {}
-
     explicit type_instantiate(heap& ast) : ast(ast) {}
 
     type_expression* operator() (type_expression *const t) {
@@ -761,8 +726,6 @@ public:
         check_struct(t->head);
     }
     
-    virtual void visit(type_source *const t) override {}
-
     bool operator() (type_expression *const t) {
         visited.clear();
         cycle_free = true;
@@ -821,9 +784,6 @@ public:
         virtual void visit(type_clause *const t2) override {
             unify.unifies = false;
         }
-        virtual void visit(type_source *const t2) override {
-            t1->replace_with(t2, unify.unions);
-        }
         explicit variable_unify(trail &unify) : unify(unify) {}
         void operator() (type_variable *const v1) {
             t1 = v1;
@@ -857,9 +817,6 @@ public:
         virtual void visit(type_clause *const t2) override {
             unify.unifies = false;
         }
-        virtual void visit(type_source *const t2) override {
-            unify.unifies = false;
-        }
         explicit atom_unify(trail &unify) : unify(unify) {}
         void operator() (type_atom *const v1) {
             t1 = v1;
@@ -891,9 +848,6 @@ public:
         virtual void visit(type_clause *const t2) override {
             unify.queue(t1, t2->head);
         }
-        virtual void visit(type_source *const t2) override {
-            unify.unifies = false;
-        }
         explicit struct_unify(trail &unify) : unify(unify) {}
         void operator() (type_struct *const a1) {
             t1 = a1;
@@ -923,9 +877,6 @@ public:
         virtual void visit(type_clause *const t2) override {
             unify.unifies = false;
         }
-        virtual void visit(type_source *const t2) override {
-            unify.unifies = false;
-        }
         explicit rule_unify(trail &unify) : unify(unify) {}
         void operator() (type_clause *const r1) {
             t1 = r1;
@@ -938,44 +889,8 @@ public:
         rule(u1);
     }
 
-
-
-    class source_unify : public type_visitor {
-        trail &unify;
-        type_source *t1;
-    public:
-        virtual void visit(type_variable *const t2) override {
-            t2->replace_with(t1, unify.unions);
-        }
-        virtual void visit(type_atom *const t2) override {
-            unify.unifies = false;
-        }
-        virtual void visit(type_struct *const t2) override {
-            unify.unifies = false;
-        }
-        virtual void visit(type_clause *const t2) override {
-            unify.unifies = false;
-        }
-        virtual void visit(type_source *const t2) override {
-            if (t1->src != t2->src) {
-                unify.unifies = false;
-            }
-        }
-        explicit source_unify(trail &unify) : unify(unify) {}
-        void operator() (type_source *const r1) {
-            t1 = r1;
-            unify.u2->accept(this);
-        }
-    } source;
-
-    virtual void visit(type_source *const u1) override {
-        source(u1);
-    }
-
-
-
     explicit trail() : variable(*this), atom(*this), strct(*this),
-        rule(*this), source(*this) {}
+        rule(*this) {}
 
 private:
     bool unify() {
