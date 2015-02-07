@@ -438,8 +438,10 @@ public:
         return t;
     }
 
-    template <typename T, typename U>
-    type_clause* new_type_clause(type_struct *head, T&& cyck, U&& goals, int id = 0) {
+    template <typename T = set<type_variable*>, typename U = vector<type_struct*>>
+    type_clause* new_type_clause(type_struct *head
+    , T&& cyck = set<type_variable*> {}, U&& goals = vector<type_struct*> {}
+    , int id = 0) {
         unique_ptr<type_clause> u(new type_clause(head, forward<T>(cyck), forward<U>(goals), id));
         type_clause *const t = u.get();
         region.emplace_back(move(u));
@@ -494,6 +496,11 @@ class type_show : public type_visitor {
 public:
     virtual void visit(type_variable *const t) override {
         show_variable(t);
+        type_expression *const e = find(t);
+        if (t != e) {
+            cout << " = ";
+            e->accept(this);
+        }
     }
 
     virtual void visit(type_atom *const t) override {
@@ -505,7 +512,7 @@ public:
         if (t->args.size() > 0) {
             cout << "(";
             for (auto i = t->args.begin(); i != t->args.end(); ++i) {
-                find(*i)->accept(this);
+                (*i)->accept(this);
                 if (i + 1 != t->args.end()) {
                     cout << ", ";
                 }
@@ -526,14 +533,15 @@ public:
                     cout << ", ";
                 }
             }
-            cout << "] ";
+            cout << "]";
         }
         if (t->impl.size() > 0) {
-            cout << " :- ";
+            cout << " :-\n";
             for (auto i = t->impl.begin(); i != t->impl.end(); ++i) {
-                find(*i)->accept(this);
+                cout << "\t";
+                (*i)->accept(this);
                 if (i + 1 != t->impl.end()) {
-                    cout << ", ";
+                    cout << ",\n";
                 }
             }
         }
@@ -543,7 +551,7 @@ public:
 
     void operator() (type_expression *const t) {
         if (t != nullptr) {
-            find(t)->accept(this);
+            t->accept(this);
         }
     }
 
@@ -890,7 +898,6 @@ private:
     }
 
 public:
-    /*
     bool unify_exp_exp(type_expression *const x, type_expression *const y) {
         todo.clear();
         todo.push_back(make_pair(x, y));
@@ -901,9 +908,8 @@ public:
         //ts(y);
         //cout << "\n";
 
-        return unify();
+        return unify() && nocyc(x) && nocyc(y);
     }
-    */
 
     bool unify_goal_rule(type_struct *const g, type_clause *const r) {
         todo.clear();
@@ -975,20 +981,16 @@ struct context {
 };
 
 class unfolder {
-    static string const builtin_answer_source;
-    static string const builtin_get;
-    static string const builtin_stop;
-    static string const builtin_true;
-    static string const builtin_false;
-    // builtin_unknown is unsound.
+    static vector<type_clause*> const invalid;
 
     context &cxt;
     type_clause *goal;
     type_clause *fresh;
-    vector<type_clause*>::iterator begin;
-    vector<type_clause*>::iterator end;
+    vector<type_clause*>::const_iterator begin;
+    vector<type_clause*>::const_iterator end;
     int const trail_checkpoint;
     int const env_checkpoint;
+    enum builtin {not_builtin, builtin_neq} builtin;
 
 public:
     int const depth;
@@ -1000,20 +1002,52 @@ public:
     unfolder(context &cxt, type_clause *g, int d)
     : cxt(cxt)
     , goal(g)
-    , begin()
-    , end()
     , trail_checkpoint(cxt.unify.checkpoint())
     , env_checkpoint(cxt.ast.checkpoint())
+    , builtin(not_builtin)
     , depth(d) {
         type_struct *first = goal->impl.front();
         env_type::iterator i = cxt.env.find(first->functor);
         if (i != cxt.env.end()) {
-            begin = i->second.begin();
-            end = i->second.end();
+            begin = i->second.cbegin();
+            end = i->second.cend();
+        } else if (first->functor->value == "neq" && first->args.size() == 2) {
+            end = invalid.cend();
+            begin = end;
+            builtin = builtin_neq;
         }
     }
 
-    type_clause* get();
+    type_clause* get() {
+        cxt.unify.backtrack(trail_checkpoint);
+        cxt.ast.backtrack(env_checkpoint);
+        type_struct *const first = goal->impl.front();
+
+        while (begin != end) {
+            type_clause* clause = *(begin++);
+            if (cxt.unify.match_goal_rule(first, clause)) {
+                fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
+                cxt.unify.unify_goal_rule(first, fresh);
+                vector<type_struct*> impl(fresh->impl.begin(), fresh->impl.end());
+                impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
+                return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), clause->id);
+            }
+        }
+
+        switch (builtin) {
+            case builtin_neq:
+                if (cxt.unify.unify_exp_exp(first->args[0], first->args[1])) {
+                    return nullptr;
+                } else {
+                    fresh = cxt.ast.new_type_clause(goal->impl.front());
+                    vector<type_struct*> impl(goal->impl.begin() + 1, goal->impl.end());
+                    return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), 1);
+                }
+            default:
+                return nullptr;
+        }
+    }
+
 
     type_clause* reget() {
         //return goal;
@@ -1026,6 +1060,8 @@ public:
         return begin == end;
     }
 };
+
+vector<type_clause*> const unfolder::invalid {};
 
 //----------------------------------------------------------------------------
 // Transitive Closure
@@ -1139,28 +1175,6 @@ public:
 };
 
 int solver::next_id = 0;
-
-//----------------------------------------------------------------------------
-// Unfolder::get 
-
-type_clause* unfolder::get() {
-    cxt.unify.backtrack(trail_checkpoint);
-    cxt.ast.backtrack(env_checkpoint);
-    type_struct *const first = goal->impl.front();
-
-    while (begin != end) {
-        type_clause* clause = *(begin++);
-        if (cxt.unify.match_goal_rule(first, clause)) {
-            fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
-            cxt.unify.unify_goal_rule(first, fresh);
-            vector<type_struct*> impl(fresh->impl.begin(), fresh->impl.end());
-            impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
-            return cxt.ast.new_type_clause(goal->head,set<type_variable*> {}, move(impl), clause->id);
-        }
-    }
-
-    return nullptr;
-}
 
 //----------------------------------------------------------------------------
 // Parser 
