@@ -994,9 +994,7 @@ public:
         rule(*this) {}
 
 private:
-    bool unify() {
-        unifies = true;
-
+    void unify() { // set unifies to true first.
         while (todo.size() > 0 && unifies) {
             texp_pair const &tt = todo.back();
             type_expression *const u1 = find(tt.first);
@@ -1006,8 +1004,6 @@ private:
                 u1->accept(this);
             }
         }
-
-        return unifies;
     }
 
 public:
@@ -1027,30 +1023,33 @@ public:
     bool unify_goal_rule(type_struct *const g, type_clause *const r) {
         deferred_goals.clear();
         todo.clear();
+        unifies = true;
+
         struct_struct(g, r->head);
 
         /*type_show ts;
         ts(g);
         cout << " <U> ";
         ts(r);
-        cout << "\n";*/
-
-        bool unifies = unify();
+        cout << endl;*/
 
         if (unifies) {
-            for (type_variable *const v : r->cyck) {
-                if (!nocyc(v)) {
-                    return false;
+            unify();
+            if (unifies) {
+                for (type_variable *const v : r->cyck) {
+                    if (!nocyc(v)) {
+                        return false;
+                    }
                 }
+
+                /*cout << " = ";
+                ts(g); 
+                cout << " <U> ";
+                ts(r);
+                cout << "\n\n";*/
+
+                return true;
             }
-
-            /*cout << " = ";
-            ts(g); 
-            cout << " <U> ";
-            ts(r);
-            cout << "\n\n";*/
-
-            return true;
         }
 
         return false;
@@ -1543,6 +1542,7 @@ public:
     }
 
     type_struct* parse_struct() {
+        bool neg = accept(is_minus);
         type_atom* functor = atom();
         if(accept(is_brace_open)) {
             vector<type_expression*> terms {parse_terms()};
