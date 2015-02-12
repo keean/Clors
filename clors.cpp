@@ -18,6 +18,7 @@
 #include <type_traits>
 
 #include <ctime>
+#include <cassert>
 
 extern "C" {
 #include <sys/resource.h>
@@ -240,6 +241,7 @@ protected:
 
 class type_expression;
 class type_variable;
+class type_attrvar;
 class type_atom;
 class type_struct;
 class type_clause;
@@ -295,6 +297,8 @@ public:
         u.emplace_back(x, ranked);
     }
 
+    friend void link2(type_attrvar*& x, type_attrvar*& y, union_stack& u);
+
     void replace_with(type_expression *e, union_stack& u) {
         bool const ranked = (rank == e->rank);
         if (ranked) {
@@ -307,10 +311,25 @@ public:
 
 class type_variable : public type_expression {
     friend class heap;
-    type_variable(string const name) : name(move(name)) {}
+
+    template <typename T>
+    type_variable(T&& name) : name(forward<T>(name)) {}
 
 public:
     string const name;
+
+    virtual void accept(class type_visitor *v) override;
+};
+
+class type_attrvar : public type_expression {
+    friend class heap;
+
+    type_attrvar(type_variable* var, type_struct* goal) : var(var), goal(goal), next(nullptr) {}
+
+public:
+    type_variable* const var;
+    type_struct* goal;
+    type_attrvar* next;
 
     virtual void accept(class type_visitor *v) override;
 };
@@ -327,17 +346,6 @@ public:
     virtual void accept(class type_visitor *v) override;
 };
 
-/*
-class type_integer : public type_expression {
-    friend class heap;
-    type_integer(int const value) : value(move(value)) {}
-
-public:
-    int const value;
-    virtual void accept(class type_visitor *v) override;
-};
-*/
-
 class type_struct : public type_expression {
     friend class heap;
     template <typename T>
@@ -350,20 +358,6 @@ public:
 
     virtual void accept(class type_visitor *v) override;
 };
-
-/*
-class type_conjunction : public type_expression {
-    friend class heap;
-    type_conjunction(
-        vector<type_struct*>::iterator fl, vector<type_struct*>::iterator ll,
-        vector<type_struct*>::iterator fr, vector<type_struct*>::iterator lr
-    ) : fl(fl), ll(ll), fr(fr), lr(lr) {}
-
-public:
-    vector<type_struct*>::iterator fl, ll, fr, lr;
-    virtual void accept(class type_visitor *v) override;
-};
-*/
 
 class type_clause : public type_expression {
     friend class heap;
@@ -381,17 +375,33 @@ public:
     virtual void accept(class type_visitor *v) override;
 };
 
+
+
 struct type_visitor {
     virtual void visit(type_variable *t) = 0;
+    virtual void visit(type_attrvar *t) = 0;
     virtual void visit(type_atom *t) = 0;
     virtual void visit(type_struct *t) = 0;
     virtual void visit(type_clause *t) = 0;
 };
 
 void type_variable::accept(class type_visitor *v) {v->visit(this);}
+void type_attrvar::accept(class type_visitor *v) {v->visit(this);}
 void type_atom::accept(class type_visitor *v) {v->visit(this);}
 void type_struct::accept(class type_visitor *v) {v->visit(this);}
 void type_clause::accept(class type_visitor *v) {v->visit(this);}
+
+void link2(type_attrvar*& x, type_attrvar*& y, union_stack& u) {
+    bool ranked = false;
+    if (x->rank > y->rank) {
+        swap(x, y);
+    } else if (x->rank == y->rank) {
+        ranked = true;
+        ++(y->rank);
+    }
+    x->canonical = y;
+    u.emplace_back(x, ranked);
+}
 
 //----------------------------------------------------------------------------
 // Heap : The Global Stack
@@ -416,10 +426,17 @@ public:
     }
 
     // Types
-    type_variable* new_type_variable(string const& n) {
+    template <typename T>
+    type_variable* new_type_variable(T&& n) {
         unique_ptr<type_variable> u(new type_variable(n));
         type_variable *const t = u.get();
         region.emplace_back(move(u));
+        return t;
+    }
+
+    type_attrvar* new_type_attrvar(type_variable* v, type_struct* g) {
+        type_attrvar* const t = new type_attrvar(v, g);
+        region.emplace_back(unique_ptr<type_attrvar>(t));
         return t;
     }
 
@@ -493,21 +510,7 @@ class type_show : public type_visitor {
         cout << ss.str();
     }
 
-public:
-    virtual void visit(type_variable *const t) override {
-        show_variable(t);
-        type_expression *const e = find(t);
-        if (t != e) {
-            cout << " = ";
-            e->accept(this);
-        }
-    }
-
-    virtual void visit(type_atom *const t) override {
-        cout << t->value;
-    }
-
-    virtual void visit(type_struct *const t) override {
+    void show_struct(type_struct *const t) {
         cout << t->functor->value;
         if (t->args.size() > 0) {
             cout << "(";
@@ -521,9 +524,42 @@ public:
         }
     }
 
+public:
+    virtual void visit(type_variable *const t) override {
+        show_variable(t);
+        type_expression *const e = find(t);
+        if (t != e) {
+            cout << " = ";
+            e->accept(this);
+        }
+    }
+
+    virtual void visit(type_attrvar *const t) override {
+        show_variable(t->var);
+        /*if (t->goal != nullptr) {
+            cout << "{";
+            for (auto i = t; i != nullptr; i = i->next) {
+                assert(i->goal != nullptr);
+                show_struct(i->goal);
+                if (i->next != nullptr) {
+                    cout << ", ";
+                }
+            }
+            cout << "} ";
+        }*/
+    }
+
+    virtual void visit(type_atom *const t) override {
+        cout << t->value;
+    }
+
+    virtual void visit(type_struct *const t) override {
+        show_struct(t);
+    }
+
     virtual void visit(type_clause *const t) override {
         cout << t->id << ". ";
-        t->head->accept(this);
+        show_struct(t->head);
         if (t->cyck.size() > 0) {
             cout << " [";
             for (set<type_variable*>::iterator i = t->cyck.begin(); i != t->cyck.end();) {
@@ -539,7 +575,7 @@ public:
             cout << " :-\n";
             for (auto i = t->impl.begin(); i != t->impl.end(); ++i) {
                 cout << "\t";
-                (*i)->accept(this);
+                show_struct(*i);
                 if (i + 1 != t->impl.end()) {
                     cout << ",\n";
                 }
@@ -580,6 +616,10 @@ class get_variables : public type_visitor {
 public:
     virtual void visit(type_variable *const t) override {
         tvars.insert(t);
+    }
+
+    virtual void visit(type_attrvar *const t) override {
+        tvars.insert(t->var);
     }
 
     virtual void visit(type_atom *const t) override {}
@@ -627,6 +667,24 @@ class type_instantiate : public type_visitor {
         return ast.new_type_struct(t->functor, move(args));
     }
 
+    type_variable* inst_var(type_variable *const t) {
+        tvar_map_type::iterator const i = tvar_map.find(t);
+        if (i == tvar_map.end()) { // fresh type variable
+            type_variable *const n = ast.new_type_variable(t->name);
+            tvar_map.emplace(t, n);
+            return n;
+        } 
+        return i->second;
+    }
+
+    type_attrvar* inst_attr(type_attrvar* const t) {
+        type_attrvar* const a = ast.new_type_attrvar(inst_var(t->var), inst_struct(t->goal));
+        if (t->next != nullptr) {
+            a->next = inst_attr(t->next);
+        }
+        return a;
+    }
+
 public:
     type_clause* inst_rule(
         type_struct *const h,
@@ -651,14 +709,11 @@ public:
     }
 
     virtual void visit(type_variable *const t) override {
-        tvar_map_type::iterator const i = tvar_map.find(t);
-        if (i == tvar_map.end()) { // fresh type variable
-            type_variable *const n = ast.new_type_variable(t->name);
-            tvar_map.emplace(t, n);
-            exp = n;
-        } else { // var in local scope
-            exp = i->second;
-        }
+        exp = inst_var(t);
+    }
+
+    virtual void visit(type_attrvar *const t) override {
+        exp = inst_attr(t);
     }
 
     virtual void visit(type_atom *const t) override {
@@ -704,6 +759,8 @@ class no_cycles : public type_visitor {
 public:
     virtual void visit(type_variable *const t) override {}
 
+    virtual void visit(type_attrvar *const t) override {}
+
     virtual void visit(type_atom *const t) override {}
 
     virtual void visit(type_struct *const t) override {
@@ -728,12 +785,15 @@ public:
 //----------------------------------------------------------------------------
 // Rational Tree Unification
 
-class trail : public type_visitor {
+struct trail : public type_visitor {
+    union_stack unions;
+
+private:
     using texp_pair = pair<type_expression*, type_expression*>;
     no_cycles nocyc;
 
-    union_stack unions;
     vector<texp_pair> todo;
+    vector<type_attrvar*> deferred_goals;
 
     type_expression *u2;
     bool unifies;
@@ -763,6 +823,9 @@ public:
         virtual void visit(type_variable *const t2) override {
             link(t1, t2, unify.unions);
         }
+        virtual void visit(type_attrvar* const t2) override {
+            t1->replace_with(t2, unify.unions);
+        }
         virtual void visit(type_atom *const t2) override {
             t1->replace_with(t2, unify.unions);
         }
@@ -785,11 +848,54 @@ public:
 
 
 
+    class attrvar_unify : public type_visitor {
+        trail &unify;
+        type_attrvar *t1;
+    public:
+        virtual void visit(type_variable *const t2) override {
+            t2->replace_with(t1, unify.unions);
+        }
+        virtual void visit(type_attrvar* t2) override {
+            link2(t1, t2, unify.unions);
+            type_attrvar* i = t2;
+            while (i->next != nullptr) {
+                i = i->next;
+            }
+            i->next = t1;
+        }
+        virtual void visit(type_atom *const t2) override {
+            unify.deferred_goals.push_back(t1);
+            t1->replace_with(t2, unify.unions);
+        }
+        virtual void visit(type_struct *const t2) override {
+            unify.deferred_goals.push_back(t1);
+            t1->replace_with(t2, unify.unions);
+        }
+        virtual void visit(type_clause *const t2) override {
+            unify.unifies = false;
+        }
+        explicit attrvar_unify(trail &unify) : unify(unify) {}
+        void operator() (type_attrvar *const v1) {
+            t1 = v1;
+            unify.u2->accept(this);
+        }
+    } attrvar;
+
+    virtual void visit(type_attrvar *const u1) override {
+        attrvar(u1);
+    }
+
+
+
     class atom_unify : public type_visitor {
         trail &unify;
         type_atom *t1;
     public:
         virtual void visit(type_variable *const t2) override {
+            t2->replace_with(t1, unify.unions);
+        }
+        virtual void visit(type_attrvar *const t2) override {
+            unify.deferred_goals.push_back(t2);
             t2->replace_with(t1, unify.unions);
         }
         virtual void visit(type_atom *const t2) override {
@@ -825,6 +931,10 @@ public:
         virtual void visit(type_variable *const t2) override {
             t2->replace_with(t1, unify.unions);
         }
+        virtual void visit(type_attrvar *const t2) override {
+            unify.deferred_goals.push_back(t2);
+            t2->replace_with(t1, unify.unions);
+        }
         virtual void visit(type_atom *const t2) override {
             if (t1->args.size() > 0 || t2->value != t1->functor->value) {
                 unify.unifies = false;
@@ -856,6 +966,9 @@ public:
         virtual void visit(type_variable *const t2) override {
             unify.unifies = false;
         }
+        virtual void visit(type_attrvar *const t2) override {
+            unify.unifies = false;
+        }
         virtual void visit(type_atom *const t2) override {
             unify.unifies = false;
         }
@@ -877,7 +990,7 @@ public:
         rule(u1);
     }
 
-    explicit trail() : variable(*this), atom(*this), strct(*this),
+    explicit trail() : variable(*this), attrvar(*this), atom(*this), strct(*this),
         rule(*this) {}
 
 private:
@@ -898,7 +1011,7 @@ private:
     }
 
 public:
-    bool unify_exp_exp(type_expression *const x, type_expression *const y) {
+    /*bool unify_exp_exp(type_expression *const x, type_expression *const y) {
         todo.clear();
         todo.push_back(make_pair(x, y));
 
@@ -909,9 +1022,10 @@ public:
         //cout << "\n";
 
         return unify() && nocyc(x) && nocyc(y);
-    }
+    }*/
 
     bool unify_goal_rule(type_struct *const g, type_clause *const r) {
+        deferred_goals.clear();
         todo.clear();
         struct_struct(g, r->head);
 
@@ -954,12 +1068,125 @@ public:
         }
     }
 
+    vector<type_attrvar*> const& get_deferred_goals() {
+        return deferred_goals;
+    }
+
     bool match_goal_rule(type_struct *const g, type_clause *const r) {
         //cout << "MATCH: ";
         int const p = checkpoint();
         bool const matches = unify_goal_rule(g, r);
         backtrack(p);
         return matches;
+    }
+};
+
+//----------------------------------------------------------------------------
+// Rational Tree Disunification: only result, no variables unified.
+
+struct disunify : public type_visitor {
+    enum result {different, same, variable_deferred, attrvar_deferred} result;
+    type_variable* defer_variable;
+    type_attrvar* defer_attrvar;
+
+private:
+    using texp_pair = pair<type_expression*, type_expression*>;
+    vector<texp_pair> todo;
+    type_expression *u2;
+
+    inline void queue(type_expression *const t1, type_expression *const t2) {
+        if (t1 != t2) {
+            todo.emplace_back(t1, t2);
+        }
+    }
+
+    inline void struct_struct(type_struct *const t1, type_struct *const t2) {
+        if ((t1->functor == t2->functor) && (t1->args.size() == t2->args.size())) {
+            //link(t1, t2, unions); // need this for cyclic termination?
+            for (int i = 0; i < t1->args.size(); ++i) {
+                queue(t1->args[i], t2->args[i]);
+            }
+        } else {
+            result = different;
+        }
+    }
+
+    class atom_disunify : public type_visitor {
+        disunify &du;
+        type_atom *t1;
+    public:
+        virtual void visit(type_variable* const t2) override {du.defer_variable=t2; du.result = variable_deferred;}
+        virtual void visit(type_attrvar* const t2) override {du.defer_attrvar=t2; du.result = attrvar_deferred;}
+        virtual void visit(type_atom* const t2) override {du.result = different;}
+        virtual void visit(type_struct* const t2) override {du.result = different;}
+        virtual void visit(type_clause* const t2) override {du.result = different;} // need to think about heads and atoms?
+        void operator() (type_atom* const u1) {
+            t1 = u1;
+            du.u2->accept(this);
+        }
+        atom_disunify(disunify &du) : du(du) {}
+    } atom_disunify;
+
+    class struct_disunify : public type_visitor {
+        disunify &du;
+        type_struct *t1;
+    public:
+        virtual void visit(type_variable* const t2) override {du.defer_variable=t2; du.result = variable_deferred;}
+        virtual void visit(type_attrvar* const t2) override {du.defer_attrvar=t2; du.result = attrvar_deferred;}
+        virtual void visit(type_atom* const t2) override {du.result = different;}
+        virtual void visit(type_struct* const t2) override {du.struct_struct(t1, t2);}
+        virtual void visit(type_clause* const t2) override {du.struct_struct(t1, t2->head);}
+        void operator() (type_struct* const u1) {
+            t1 = u1;
+            du.u2->accept(this);
+        }
+        struct_disunify(disunify &du) : du(du) {}
+    } struct_disunify;
+
+    enum result du() {
+        result = same;
+
+        while ((todo.size() > 0) && (result == same)) {
+            texp_pair const &tt = todo.back();
+            type_expression *const u1 = find(tt.first);
+            u2 = find(tt.second);
+            todo.pop_back();
+            if (u1 != u2) {
+                u1->accept(this);
+            }
+        }
+
+        return result;
+    }
+
+public:
+    virtual void visit(type_variable* const t1) override {defer_variable=t1; result = variable_deferred;}
+    virtual void visit(type_attrvar* const t1) override {defer_attrvar=t1; result = attrvar_deferred;}
+    virtual void visit(type_atom* const t1) override {atom_disunify(t1);}
+    virtual void visit(type_struct* const t1) override {struct_disunify(t1);}
+    virtual void visit(type_clause* const t1) override {struct_disunify(t1->head);}
+
+    disunify() : atom_disunify(*this), struct_disunify(*this) {}
+
+    enum result exp_exp(type_expression *const x, type_expression *const y) {
+        todo.clear();
+        todo.push_back(make_pair(x, y));
+
+        //type_show ts;
+        //ts(x);
+        //cout << " <D> ";
+        //ts(y);
+        //cout << "\n";
+
+        return du();
+    }
+
+    type_variable* get_deferred_variable() {
+        return defer_variable;
+    }
+
+    type_attrvar* get_deferred_attrvar() {
+        return defer_attrvar;
     }
 };
 
@@ -984,7 +1211,6 @@ class unfolder {
     static vector<type_clause*> const invalid;
 
     context &cxt;
-    type_clause *goal;
     type_clause *fresh;
     vector<type_clause*>::const_iterator begin;
     vector<type_clause*>::const_iterator end;
@@ -993,6 +1219,7 @@ class unfolder {
     enum builtin {not_builtin, builtin_neq} builtin;
 
 public:
+    type_clause *goal;
     int const depth;
 
     unfolder(const unfolder&) = delete;
@@ -1028,21 +1255,59 @@ public:
             if (cxt.unify.match_goal_rule(first, clause)) {
                 fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
                 cxt.unify.unify_goal_rule(first, fresh);
-                vector<type_struct*> impl(fresh->impl.begin(), fresh->impl.end());
+                vector<type_attrvar*> const& d = cxt.unify.get_deferred_goals();
+                vector<type_struct*> impl;
+                for (auto i : d) {
+                    for (type_attrvar* a = i; i != nullptr; i = i->next) {
+                        cout << "THAW ";
+                        type_show ts;
+                        ts(i->goal);
+                        cout << endl;
+                        impl.push_back(i->goal);
+                    }
+                }
+                impl.insert(impl.end(), fresh->impl.begin(), fresh->impl.end());
                 impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
                 return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), clause->id);
             }
         }
 
         switch (builtin) {
-            case builtin_neq:
-                if (cxt.unify.unify_exp_exp(first->args[0], first->args[1])) {
-                    return nullptr;
-                } else {
-                    fresh = cxt.ast.new_type_clause(goal->impl.front());
-                    vector<type_struct*> impl(goal->impl.begin() + 1, goal->impl.end());
-                    return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), 1);
+            case builtin_neq: {
+                disunify dis;
+
+                switch (dis.exp_exp(first->args[0], first->args[1])) {
+                    case disunify::same:
+                        return nullptr;
+                    case disunify::variable_deferred: {
+                        type_variable* defvar = dis.get_deferred_variable();
+                        type_attrvar* v = cxt.ast.new_type_attrvar(defvar, first);
+                        defvar->replace_with(v, cxt.unify.unions);
+                        cout << "FREEZE ";
+                        type_show ts;
+                        ts(first);
+                        cout << endl;
+                        break;
+                    }
+                    case disunify::attrvar_deferred: {
+                        type_attrvar* defatr = dis.get_deferred_attrvar();
+                        type_attrvar* v = cxt.ast.new_type_attrvar(defatr->var, first);
+                        v->next = defatr;
+                        defatr->replace_with(v, cxt.unify.unions);
+                        cout << "FREEZE+ ";
+                        type_show ts;
+                        ts(first);
+                        cout << endl;
+                        break;
+                    }
+                    case disunify::different:
+                        break;
                 }
+
+                fresh = cxt.ast.new_type_clause(goal->impl.front());
+                vector<type_struct*> impl(goal->impl.begin() + 1, goal->impl.end());
+                return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), 1);
+            }
             default:
                 return nullptr;
         }
@@ -1110,7 +1375,7 @@ public:
             //cout << "SOLVER GOT\n";
             if (next_goal != nullptr) {
                 //cout << "[" << or_stack.size() << "] ";
-                //(type_show {}) (next_goal);
+                //(type_show {}) (src.goal);
                 //cout << "\n";
                 //cout << "SUCC\n";
                 if (next_goal->impl.empty()) {
@@ -1130,11 +1395,20 @@ public:
                 }
                 //if (src.at_end()) { // LCO
                 //    or_stack.pop_back();
-                    //cout << "[" << or_stack.size() << "] LCO\n";
+                //    cout << "[" << or_stack.size() << "] LCO\n";
                 //}
+                //cout << or_stack.size() << " " << next_goal->impl.size() << " <= " << max_depth << endl;
                 if (or_stack.size() + next_goal->impl.size() <= max_depth) {
+                    //cout << "PUSH" << endl;
                     or_stack.emplace_back(new unfolder(cxt, next_goal, depth));
-                } 
+                } else {
+                    //cout << "EXCEED\n";
+                    or_stack.pop_back(); 
+                    //cout << "[" << or_stack.size() << "]\n";
+                    while (!or_stack.empty() && or_stack.back()->at_end()) {
+                        or_stack.pop_back();
+                    }
+                }
             } else {
                 //cout << "FAIL\n";
                 or_stack.pop_back(); 

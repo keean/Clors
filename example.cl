@@ -36,7 +36,7 @@ typing(Env, var(X), cons(def(X, Type), nil), Type) :-
 #:- typing(cons(def(i1, ty2(nil, int)), nil),              lam(x, app(x, i1)), C, T).
 #:- typing(cons(def(i1, ty2(nil, int)), nil),               app(f, app(x, i1)), C, T).
 #:- typing(cons(def(i1, ty2(nil, int)), nil),        lam(x, app(f, app(x, i1))), C, T).
-:- typing(cons(def(i1, ty2(nil, int)), nil), lam(var(f), lam(var(x), app(var(f), app(var(x), var(i1))))), C, T).
+:- typing(cons(def(i1, ty2(nil, int)), nil), lam(f, lam(x, app(var(f), app(var(x), var(i1))))), C, T).
 #:- typing(cons(def(i1, ty2(nil, int)), cons(def(b1, ty2(nil, bool)), nil)),
 #    lam(f, lam(x, lam(x, app(app(var(f), app(var(x), var(i1))), app(var(x), var(b1)))))), C, T).
 #:- typing(cons(def(i1, ty2(nil, int)), cons(def(b1, ty2(nil, bool)), nil)),
