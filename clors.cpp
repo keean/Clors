@@ -24,6 +24,12 @@ extern "C" {
 #include <sys/resource.h>
 }
 
+#ifdef DEBUG
+#define DEBUG(X) X
+#else
+#define DEBUG(X)
+#endif
+
 using namespace std;
 
 //----------------------------------------------------------------------------
@@ -328,7 +334,7 @@ class type_attrvar : public type_expression {
 
 public:
     type_variable* const var;
-    type_struct* goal;
+    type_struct* const goal;
     type_attrvar* next;
 
     virtual void accept(class type_visitor *v) override;
@@ -349,12 +355,13 @@ public:
 class type_struct : public type_expression {
     friend class heap;
     template <typename T>
-    type_struct(type_atom* const functor, T&& args)
-        : functor(functor), args(forward<T>(args)) {}
+    type_struct(type_atom* const functor, T&& args, bool neg)
+        : functor(functor), args(forward<T>(args)), negated(neg) {}
 
 public:
     type_atom* const functor;
     vector<type_expression*> const args;
+    bool const negated;
 
     virtual void accept(class type_visitor *v) override;
 };
@@ -428,30 +435,27 @@ public:
     // Types
     template <typename T>
     type_variable* new_type_variable(T&& n) {
-        unique_ptr<type_variable> u(new type_variable(n));
-        type_variable *const t = u.get();
-        region.emplace_back(move(u));
+        type_variable *const t = new type_variable(n);
+        region.emplace_back(t);
         return t;
     }
 
     type_attrvar* new_type_attrvar(type_variable* v, type_struct* g) {
         type_attrvar* const t = new type_attrvar(v, g);
-        region.emplace_back(unique_ptr<type_attrvar>(t));
+        region.emplace_back(t);
         return t;
     }
 
     type_atom* new_type_atom(string const& value) {
-        unique_ptr<type_atom> u(new type_atom(value));
-        type_atom *const t = u.get();
-        region.emplace_back(move(u));
+        type_atom *const t = new type_atom(value);
+        region.emplace_back(t);
         return t;
     }
 
     template <typename T>
-    type_struct* new_type_struct(type_atom* const functor, T&& args) {
-        unique_ptr<type_struct> u(new type_struct(functor, forward<T>(args)));
-        type_struct *const t = u.get();
-        region.emplace_back(move(u));
+    type_struct* new_type_struct(type_atom* const functor, T&& args, bool neg) {
+        type_struct *const t = new type_struct(functor, forward<T>(args), neg);
+        region.emplace_back(t);
         return t;
     }
 
@@ -459,9 +463,8 @@ public:
     type_clause* new_type_clause(type_struct *head
     , T&& cyck = set<type_variable*> {}, U&& goals = vector<type_struct*> {}
     , int id = 0) {
-        unique_ptr<type_clause> u(new type_clause(head, forward<T>(cyck), forward<U>(goals), id));
-        type_clause *const t = u.get();
-        region.emplace_back(move(u));
+        type_clause *const t = new type_clause(head, forward<T>(cyck), forward<U>(goals), id);
+        region.emplace_back(t);
         return t;
     }
 };
@@ -511,6 +514,9 @@ class type_show : public type_visitor {
     }
 
     void show_struct(type_struct *const t) {
+        if (t->negated) {
+            cout << "-";
+        }
         cout << t->functor->value;
         if (t->args.size() > 0) {
             cout << "(";
@@ -606,6 +612,55 @@ public:
 };
 
 //----------------------------------------------------------------------------
+// Test if term is ground - assumes no cycles.
+
+class is_ground : public type_visitor {
+    vector<type_expression*> todo;
+    enum result {none, variable, attributed} result;
+    type_variable* var;
+    type_attrvar* attr;
+
+    virtual void visit(type_variable* const t) override {
+        var = t;
+        result = variable;
+    }
+
+    virtual void visit(type_attrvar* const t) override {
+        attr = t;
+        result = attributed;
+    }
+
+    virtual void visit(type_atom* const t) override {}
+
+    virtual void visit(type_struct* const t) override {
+        for (type_expression *const u : t->args) {
+            todo.push_back(u);
+        }
+    }
+
+    virtual void visit(type_clause* const t) override {
+        todo.push_back(t->head);
+        for (type_struct* const u : t->impl) {
+            todo.push_back(t);
+        }
+    }
+
+    enum result operator() (type_expression* const t) {
+        result = none;
+        todo.clear();
+        todo.push_back(t);
+
+        while ((!todo.empty()) && (result == none)) {
+            type_expression* const u = find(todo.back());
+            todo.pop_back();
+            find(u)->accept(this);
+        }
+
+        return result;
+    }
+};
+        
+//----------------------------------------------------------------------------
 // Get Vars - assumes no cycles
 
 class get_variables : public type_visitor {
@@ -664,7 +719,7 @@ class type_instantiate : public type_visitor {
             find(e)->accept(this);
             args.push_back(exp);
         }
-        return ast.new_type_struct(t->functor, move(args));
+        return ast.new_type_struct(t->functor, move(args), t->negated);
     }
 
     type_variable* inst_var(type_variable *const t) {
@@ -1085,6 +1140,7 @@ public:
 
 struct disunify : public type_visitor {
     enum result {different, same, variable_deferred, attrvar_deferred} result;
+    vector<type_attrvar*> deferred_goals;
     type_variable* defer_variable;
     type_attrvar* defer_attrvar;
 
@@ -1101,7 +1157,9 @@ private:
 
     inline void struct_struct(type_struct *const t1, type_struct *const t2) {
         if ((t1->functor == t2->functor) && (t1->args.size() == t2->args.size())) {
-            //link(t1, t2, unions); // need this for cyclic termination?
+            //link(t1, t2, unions); // need this for cyclic termination? Don't think so as
+            //the result of the previous unifications must have no cycles, and disunification
+            //does not alter the type graph.
             for (int i = 0; i < t1->args.size(); ++i) {
                 queue(t1->args[i], t2->args[i]);
             }
@@ -1116,6 +1174,11 @@ private:
     public:
         virtual void visit(type_variable* const t2) override {du.defer_variable=t2; du.result = variable_deferred;}
         virtual void visit(type_attrvar* const t2) override {du.defer_attrvar=t2; du.result = attrvar_deferred;}
+        /*virtual void visit(type_variable* const t2) override {t2->replace_with(t1, unify.unions);} //thaw??
+        virtual void visit(type_attrvar* const t2) override {
+            unify.deferred_goals.push_back(t2);
+            t2->replace_with(t1, unify.unions);
+        }*/
         virtual void visit(type_atom* const t2) override {du.result = different;}
         virtual void visit(type_struct* const t2) override {du.result = different;}
         virtual void visit(type_clause* const t2) override {du.result = different;} // need to think about heads and atoms?
@@ -1237,10 +1300,13 @@ public:
         if (i != cxt.env.end()) {
             begin = i->second.cbegin();
             end = i->second.cend();
-        } else if (first->functor->value == "neq" && first->args.size() == 2) {
+        } else {
             end = invalid.cend();
             begin = end;
-            builtin = builtin_neq;
+
+            if (first->functor->value == "neq" && first->args.size() == 2) {
+                builtin = builtin_neq;
+            }
         }
     }
 
@@ -1249,35 +1315,31 @@ public:
         cxt.ast.backtrack(env_checkpoint);
         type_struct *const first = goal->impl.front();
 
-        while (begin != end) {
-            type_clause* clause = *(begin++);
-            if (cxt.unify.match_goal_rule(first, clause)) {
-                fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
-                cxt.unify.unify_goal_rule(first, fresh);
-                vector<type_attrvar*> const& d = cxt.unify.get_deferred_goals();
-                vector<type_struct*> impl;
-                for (auto i : d) {
-                    for (type_attrvar* a = i; i != nullptr; i = i->next) {
-                        cout << "THAW ";
-                        type_show ts;
-                        ts(i->goal);
-                        cout << endl;
-                        impl.push_back(i->goal);
-                    }
-                }
-                impl.insert(impl.end(), fresh->impl.begin(), fresh->impl.end());
-                impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
-                return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), clause->id);
-            }
-        }
+        //if (first->negated) { //need to swap goal-list and or stack for negated part
+            //cout << "NEGATED" << endl;
 
-        switch (builtin) {
-            case builtin_neq: {
-                disunify dis;
+            // -((a & b & c) | (d & e & f) | (g & h & i))
+            // (-(a & b & c) & -(d & e & f) & -(g & h & i))
+            // ((-a | -b | -c) & (-d | -e | -f) & (-g | -h | -i))
 
-                switch (dis.exp_exp(first->args[0], first->args[1])) {
+            // ((a | b | c) & (d | e | f) & (g | h | i)
+            // (-(-a & -b & -c) & (-d & -e & -f) & (-g & -h & -i))
+            // -((-a & -b & -c) | (-d & -e & -f) | (-g & -h & -i)
+            // try each goal:
+
+            /*while (begin != end) {
+                type_clause* clause = *(begin++);
+                if (cxt.unify.match_goal_rule(first, clause)) {
+                    fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
+                    cxt.unify.unify_goal_rule(first, fresh);
+
+
+
+                switch( dis.exp_exp(first, fresh->head)) {
                     case disunify::same:
                         return nullptr;
+                    case disunify::different:
+                        break;
                     case disunify::variable_deferred: {
                         type_variable* defvar = dis.get_deferred_variable();
                         type_attrvar* v = cxt.ast.new_type_attrvar(defvar, first);
@@ -1297,6 +1359,70 @@ public:
                         type_show ts;
                         ts(first);
                         cout << endl;
+                        break;
+                    }
+                }
+            }
+
+            return vector<type_struct*> {};
+        } else {*/
+            while (begin != end) {
+                type_clause* clause = *(begin++);
+                if (cxt.unify.match_goal_rule(first, clause)) {
+                    fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
+                    cxt.unify.unify_goal_rule(first, fresh);
+                    vector<type_attrvar*> const& d = cxt.unify.get_deferred_goals();
+                    vector<type_struct*> impl;
+                    for (auto i : d) {
+                        for (type_attrvar* a = i; i != nullptr; i = i->next) {
+                            DEBUG(
+                                cout << "THAW ";
+                                type_show ts;
+                                ts(i->goal);
+                                cout << endl;
+                            );
+                            impl.push_back(i->goal);
+                        }
+                    }
+                    impl.insert(impl.end(), fresh->impl.begin(), fresh->impl.end());
+                    impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
+                    return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), clause->id);
+                }
+            }
+
+            //return nullptr;
+        //}
+
+        switch (builtin) {
+            case builtin_neq: {
+                disunify dis;
+
+                switch (dis.exp_exp(first->args[0], first->args[1])) {
+                    case disunify::same:
+                        return nullptr;
+                    case disunify::variable_deferred: {
+                        type_variable* defvar = dis.get_deferred_variable();
+                        type_attrvar* v = cxt.ast.new_type_attrvar(defvar, first);
+                        defvar->replace_with(v, cxt.unify.unions);
+                        DEBUG(
+                            cout << "FREEZE ";
+                            type_show ts;
+                            ts(first);
+                            cout << endl;
+                        );
+                        break;
+                    }
+                    case disunify::attrvar_deferred: {
+                        type_attrvar* defatr = dis.get_deferred_attrvar();
+                        type_attrvar* v = cxt.ast.new_type_attrvar(defatr->var, first);
+                        v->next = defatr;
+                        defatr->replace_with(v, cxt.unify.unions);
+                        DEBUG(
+                            cout << "FREEZE+ ";
+                            type_show ts;
+                            ts(first);
+                            cout << endl;
+                        );
                         break;
                     }
                     case disunify::different:
@@ -1378,18 +1504,6 @@ public:
                 //cout << "\n";
                 //cout << "SUCC\n";
                 if (next_goal->impl.empty()) {
-                    cout << "PROOF:\n";
-                    type_show ts;
-                    for (auto i = or_stack.begin(); i != or_stack.end(); ++i) {
-                        type_clause *t = (*i)->reget();
-                        //if (t->impl.size() > 0) {
-                            //cout << "<" << (*i)->depth << ">";
-                            //ts(t->head);
-                            //ts((*i)->reget());
-                            ts(t);
-                        //}
-                        cout << "\n";
-                    }
                     return next_goal;
                 }
                 //if (src.at_end()) { // LCO
@@ -1429,6 +1543,22 @@ public:
         );
         return next_goal;
         */
+    }
+
+    ostream& show_proof(ostream& out) {
+        out << "PROOF:" << endl;
+        type_show ts;
+        for (auto i = or_stack.begin(); i != or_stack.end(); ++i) {
+            type_clause *t = (*i)->reget();
+            //if (t->impl.size() > 0) {
+                //out << "<" << (*i)->depth << ">";
+                //ts(t->head);
+                //ts((*i)->reget());
+                ts(t);
+            //}
+            out << endl;
+        }
+        return out;
     }
 
     virtual void stop() {
@@ -1516,12 +1646,13 @@ public:
     type_expression* term() {
         if (test(is_upper)) {
             return variable();
-        } if (test(is_lower)) {
+        } if (test(is_lower) || test(is_minus)) {
+            bool negated = accept(is_minus);
             type_atom* a = atom();
             if (accept(is_brace_open)) {
                 vector<type_expression*> terms = parse_terms();
                 expect(is_brace_close);
-                return ast.new_type_struct(a, move(terms));
+                return ast.new_type_struct(a, move(terms), negated);
             } else {
                 return a;
             }
@@ -1542,16 +1673,16 @@ public:
     }
 
     type_struct* parse_struct() {
-        bool neg = accept(is_minus);
+        bool negated = accept(is_minus);
         type_atom* functor = atom();
         if(accept(is_brace_open)) {
             vector<type_expression*> terms {parse_terms()};
             expect(is_brace_close);
             space();
-            return ast.new_type_struct(functor, move(terms));
+            return ast.new_type_struct(functor, move(terms), negated);
         } else {
             space();
-            return ast.new_type_struct(functor, vector<type_expression*> {});
+            return ast.new_type_struct(functor, vector<type_expression*> {}, negated);
         } 
     }
 
@@ -1629,13 +1760,14 @@ public:
         for (vector<type_struct*> &goal : goals) {
             for (int i = 0; i < count; ++i) {
                 solver solve(names, env, ast.new_type_clause(ast.new_type_struct(
-                    names.find("yes")->second, gv(goal)), set<type_variable*> {}, goal), i + 1);
+                    names.find("yes")->second, gv(goal), false), set<type_variable*> {}, goal), i + 1);
                 answer = solve.get();
                 if (answer != nullptr) {
-                    //cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
-                    cout << "\n";
+                    cout << endl;
+                    solve.show_proof(cout);
+                    cout << endl;
                     show_type(answer->head);
-                    cout << "\n\n";
+                    cout << endl << endl;
                     solve.stop();
                     goto next;
                 }
