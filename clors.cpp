@@ -25,9 +25,9 @@ extern "C" {
 }
 
 #ifdef DEBUG
-#define DEBUG(X) X
+#define IF_DEBUG(X) X
 #else
-#define DEBUG(X)
+#define IF_DEBUG(X)
 #endif
 
 using namespace std;
@@ -571,17 +571,19 @@ public:
     virtual void visit(type_clause *const t) override {
         cout << t->id << ". ";
         show_struct(t->head);
-        if (t->cyck.size() > 0) {
-            cout << " [";
-            for (set<type_variable*>::iterator i = t->cyck.begin(); i != t->cyck.end();) {
-                show_variable(*i);
-                ++i;
-                if (i != t->cyck.end()) {
-                    cout << ", ";
+        IF_DEBUG(
+            if (t->cyck.size() > 0) {
+                cout << " [";
+                for (set<type_variable*>::iterator i = t->cyck.begin(); i != t->cyck.end();) {
+                    show_variable(*i);
+                    ++i;
+                    if (i != t->cyck.end()) {
+                        cout << ", ";
+                    }
                 }
+                cout << "]";
             }
-            cout << "]";
-        }
+        )
         if (t->impl.size() > 0) {
             cout << " :-\n";
             for (auto i = t->impl.begin(); i != t->impl.end(); ++i) {
@@ -1380,7 +1382,7 @@ public:
                     vector<type_struct*> impl;
                     for (auto i : d) {
                         for (type_attrvar* a = i; i != nullptr; i = i->next) {
-                            DEBUG(
+                            IF_DEBUG(
                                 cout << "THAW ";
                                 type_show ts;
                                 ts(i->goal);
@@ -1409,7 +1411,7 @@ public:
                         type_variable* defvar = dis.get_deferred_variable();
                         type_attrvar* v = cxt.ast.new_type_attrvar(defvar, first);
                         defvar->replace_with(v, cxt.unify.unions);
-                        DEBUG(
+                        IF_DEBUG(
                             cout << "FREEZE ";
                             type_show ts;
                             ts(first);
@@ -1422,7 +1424,7 @@ public:
                         type_attrvar* v = cxt.ast.new_type_attrvar(defatr->var, first);
                         v->next = defatr;
                         defatr->replace_with(v, cxt.unify.unions);
-                        DEBUG(
+                        IF_DEBUG(
                             cout << "FREEZE+ ";
                             type_show ts;
                             ts(first);
@@ -1561,7 +1563,7 @@ public:
                 //ts((*i)->reget());
                 ts(t);
             //}
-            out << endl;
+            out << "." << endl;
         }
         return out;
     }
@@ -1752,7 +1754,7 @@ public:
         for (auto const& fun : env) {
             for (auto const& c : fun.second) {
                 show_type(c);
-                cout << endl;
+                cout << "." << endl;
             }
         }
         cout << endl;
@@ -1784,10 +1786,16 @@ public:
                     solve.show_proof(cout);
                     cout << endl;
                     show_type(answer->head);
-                    cout << endl << endl;
+                    cout << "." << endl << endl;
                     solve.stop();
                     goto next;
+                } else {
+                    IF_DEBUG(
+                        cout << "DEPTH " << depth_profile::report()
+                        << " ELAPSED TIME: " << profile::report() << "us\n";
+                    );
                 }
+
                 solve.stop();
             }
             //cout << "ELAPSED TIME: " << profile::report() / static_cast<double>(count) << "us\n";
