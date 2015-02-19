@@ -71,17 +71,22 @@ uint64_t profile::t {0};
 uint64_t profile::s;
 
 class depth_profile {
-    int const depth;
+    static int depth;
 
 public:
-    depth_profile(int const i) : depth(i) {
+    depth_profile(int const i) {
+        depth = i;
         profile::start();
     }
     ~depth_profile() {
         profile::finish();
-        cout << "DEPTH " << depth << " ELAPSED TIME: " << profile::report() << "us\n";
+    }
+    static int report() {
+        return depth;
     }
 };
+
+int depth_profile::depth;
 
 //----------------------------------------------------------------------------
 // Character Predicates
@@ -1743,14 +1748,16 @@ public:
         } while (!accept(is_eof));
 
         ///*
+        cout << endl;
         for (auto const& fun : env) {
             for (auto const& c : fun.second) {
                 show_type(c);
-                cout << "\n";
+                cout << endl;
             }
         }
-        cout << "\n";
+        cout << endl;
         //*/
+
 
         get_variables gv;
         type_clause *answer;
@@ -1758,11 +1765,21 @@ public:
         int const count = 100;
         context cxt(names, env);
         for (vector<type_struct*> &goal : goals) {
+            cout << ":- ";
+            for (auto g = goal.cbegin(); g != goal.cend(); g++) {
+                show_type(*g);
+                if (g + 1 != goal.cend()) {
+                    cout << ", ";
+                }
+            }
+            cout << "." << endl << endl;
             for (int i = 0; i < count; ++i) {
                 solver solve(names, env, ast.new_type_clause(ast.new_type_struct(
                     names.find("yes")->second, gv(goal), false), set<type_variable*> {}, goal), i + 1);
                 answer = solve.get();
                 if (answer != nullptr) {
+                    cout << "DEPTH " << depth_profile::report()
+                        << " ELAPSED TIME: " << profile::report() << "us\n";
                     cout << endl;
                     solve.show_proof(cout);
                     cout << endl;
