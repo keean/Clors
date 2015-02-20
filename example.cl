@@ -1,7 +1,8 @@
+member(Key, cons(Head, Tail), Val) :-
+    neq(Key,Head),
+    member(Key, Tail, Val).
 member(Key, cons(def(Key, Val), Tail), just(Val)).
 member(Key, nil, nothing).
-member(Key, cons(Head, Tail), Val) :-
-    member(Key, Tail, Val).
 
 append(nil, L, L).
 append(cons(H, T1), L, cons(H, T2)) :-
@@ -15,6 +16,7 @@ split(X, nil, nil, nil).
 split(X, cons(def(X, T), Tail1), cons(T, Tail2), Tail3 ) :-
     split(X, Tail1, Tail2, Tail3).
 split(X, cons(def(Y, T), Tail1), Tail2, cons(def(Y, T), Tail3)) :-
+    neq(X, Y),
     split(X, Tail1, Tail2, Tail3).
 
 typing(Env, lam(Var, Body), Cxt, arrow(A, B)) :-
