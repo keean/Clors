@@ -53,7 +53,8 @@ expr(let(Var, Body, Rhs), Cxt, T2) :-
     expr(Body, C1, T1),
     expr(Rhs, C2, T2),
     split(Var, C2, Def, C3),
-    unifyeach(Def, pair(C1, T1), Cxt).
+    unifyeach(Def, pair(C1, T1), C4),
+    append(C3, C4, Cxt).
 
 :- expr(
   let(cast2, lam(f, lam(x, lam(y, app(app(var(f), var(x)), var(y))))), var(cast2)),
