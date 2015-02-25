@@ -1,48 +1,61 @@
 member(Key, cons(Head, Tail), Val) :-
-    neq(Key,Head),
+    dif(Key,Head),
     member(Key, Tail, Val).
 member(Key, cons(def(Key, Val), Tail), just(Val)).
 member(Key, nil, nothing).
 
-append(nil, L, L).
 append(cons(H, T1), L, cons(H, T2)) :-
     append(T1, L, T2).
+append(nil, L, L).
 
-unifyall(nil, T).
 unifyall(cons(T, Tail), T) :-
     unifyall(Tail, T).
+unifyall(nil, T).
 
-split(X, nil, nil, nil).
+unifyeach(cons(Tapp, Tail), Tdef, Cxt) :-
+    duplicate_term(Tdef, pair(C1, Tapp)),
+    unifyeach(Tail, Tdef, Csub),
+    append(Csub, C1, Cxt).
+unifyeach(nil, T, nil).
+
+split(X, cons(def(Y, T), Tail1), Tail2, cons(def(Y, T), Tail3)) :-
+    dif(X, Y),
+    split(X, Tail1, Tail2, Tail3).
 split(X, cons(def(X, T), Tail1), cons(T, Tail2), Tail3 ) :-
     split(X, Tail1, Tail2, Tail3).
-split(X, cons(def(Y, T), Tail1), Tail2, cons(def(Y, T), Tail3)) :-
-    neq(X, Y),
-    split(X, Tail1, Tail2, Tail3).
+split(X, nil, nil, nil).
 
-typing(Env, lam(Var, Body), Cxt, arrow(A, B)) :-
-    typing(Env, Body, C1, B),
+nat(zero).
+nat(succ(X)) :-
+    nat(X).
+
+bool(true).
+bool(false).
+
+expr(var(X), cons(def(X, Type), nil), Type).
+expr(nat(X1), nil, nat) :-
+    nat(X).
+expr(bool(X), nil, bool) :-
+    bool(X).
+expr(pair(X, Y), C3, prod(A, B)) :-
+    expr(X, C1, A),
+    expr(Y, C2, B),
+    append(C1, C2, C3).
+expr(app(Fun, Arg), Cxt, B) :-
+    expr(Fun, C1, arrow(A, B)),
+    expr(Arg, C2, A),
+    append(C1, C2, Cxt).
+expr(lam(Var, Body), Cxt, arrow(A, B)) :-
+    expr(Body, C1, B),
     split(Var, C1, Def, Cxt),
     unifyall(Def, A).
-typing(Env, app(Fun, Arg), Cxt, B) :-
-    typing(Env, Fun, C1, arrow(A, B)),
-    typing(Env, Arg, C2, A),
-    append(C1, C2, Cxt).
-typing(Env, var(X), Cxt, Type) :-
-    member(X, Env, just(ty2(Cxt, Type))).
-typing(Env, var(X), cons(def(X, Type), nil), Type) :-
-    member(X, Env, nothing).
+expr(let(Var, Body, Rhs), Cxt, T2) :-
+    expr(Body, C1, T1),
+    expr(Rhs, C2, T2),
+    split(Var, C2, Def, C3),
+    unifyeach(Def, pair(C1, T1), Cxt).
 
-#:- typing(cons(def(i1, ty2(nil, int)), nil), var(i1), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), nil), var(x), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), nil), app(var(x), var(i1)), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), nil),              lam(x, app(x, i1)), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), nil),               app(f, app(x, i1)), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), nil),        lam(x, app(f, app(x, i1))), C, T).
-:- typing(cons(def(i1, ty2(nil, int)), nil), lam(f, lam(x, app(var(f), app(var(x), var(i1))))), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), cons(def(b1, ty2(nil, bool)), nil)),
-#    lam(f, lam(x, lam(x, app(app(var(f), app(var(x), var(i1))), app(var(x), var(b1)))))), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), cons(def(b1, ty2(nil, bool)), nil)),
-#    lam(f, lam(x, app(app(var(f), app(var(x), lam(z, var(z)))), app(var(x), lam(u, lam(v, var(u))))))), C, T).
-#:- typing(cons(def(i1, ty2(nil, int)), cons(def(b1, ty2(nil, bool)), nil)),
-#    lam(x, app(var(x), var(x))), C, T).
+:- expr(
+  let(cast2, lam(f, lam(x, lam(y, app(app(var(f), var(x)), var(y))))), var(cast2)),
+Cxt, Typ).
 

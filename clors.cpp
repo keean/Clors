@@ -510,6 +510,7 @@ public:
 class type_show : public type_visitor {
     var_map tvar_map;
     bool debug;
+    bool top;
 
     void show_variable(type_variable *const t) {
         int const x {tvar_map.get(t)};
@@ -537,11 +538,22 @@ class type_show : public type_visitor {
 
 public:
     virtual void visit(type_variable *const t) override {
-        show_variable(t);
-        type_expression *const e = find(t);
-        if (t != e) {
-            cout << " = ";
-            e->accept(this);
+        if (top) {
+            top = false;
+            show_variable(t);
+            type_expression *const e = find(t);
+            if (t != e) {
+                cout << " = ";
+                e->accept(this);
+            }
+            top = true;
+        } else {
+            type_expression *const e = find(t);
+            if (t != e) {
+                e->accept(this);
+            } else {
+                show_variable(t);
+            }
         }
     }
 
@@ -600,6 +612,7 @@ public:
 
     void operator() (type_expression *const t) {
         if (t != nullptr) {
+            top = true;
             t->accept(this);
         }
     }
@@ -1069,8 +1082,11 @@ private:
     }
 
 public:
-    /*bool unify_exp_exp(type_expression *const x, type_expression *const y) {
+    bool exp_exp(type_expression *const x, type_expression *const y) {
+        deferred_goals.clear();
         todo.clear();
+        unifies = true;
+
         todo.push_back(make_pair(x, y));
 
         //type_show ts;
@@ -1079,8 +1095,10 @@ public:
         //ts(y);
         //cout << "\n";
 
-        return unify() && nocyc(x) && nocyc(y);
-    }*/
+        unify();
+
+        return unifies && nocyc(x) && nocyc(y);
+    }
 
     bool unify_goal_rule(type_struct *const g, type_clause *const r) {
         deferred_goals.clear();
@@ -1285,7 +1303,7 @@ class unfolder {
     vector<type_clause*>::const_iterator end;
     int const trail_checkpoint;
     int const env_checkpoint;
-    enum builtin {not_builtin, builtin_neq} builtin;
+    enum builtin {not_builtin, builtin_dif, builtin_duplicate_term} builtin;
 
 public:
     type_clause *goal;
@@ -1311,8 +1329,10 @@ public:
             end = invalid.cend();
             begin = end;
 
-            if (first->functor->value == "neq" && first->args.size() == 2) {
-                builtin = builtin_neq;
+            if (first->functor->value == "dif" && first->args.size() == 2) {
+                builtin = builtin_dif;
+            } else if (first->functor->value == "duplicate_term" && first->args.size() == 2) {
+                builtin = builtin_duplicate_term;
             }
         }
     }
@@ -1401,7 +1421,28 @@ public:
         //}
 
         switch (builtin) {
-            case builtin_neq: {
+            case builtin_duplicate_term: { 
+                if (cxt.unify.exp_exp(cxt.inst(first->args[0]), first->args[1])) {
+                    fresh = cxt.ast.new_type_clause(first);
+                    vector<type_attrvar*> const& d = cxt.unify.get_deferred_goals();
+                    vector<type_struct*> impl;
+                    for (auto i : d) {
+                        for (type_attrvar* a = i; i != nullptr; i = i->next) {
+                            IF_DEBUG(
+                                cout << "THAW ";
+                                type_show ts;
+                                ts(i->goal);
+                                cout << endl;
+                            );
+                            impl.push_back(i->goal);
+                        }
+                    }
+                    impl.insert(impl.end(), goal->impl.begin() + 1, goal->impl.end());
+                    return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), 1);
+                }
+                return nullptr;
+            }
+            case builtin_dif: {
                 disunify dis;
 
                 switch (dis.exp_exp(first->args[0], first->args[1])) {
@@ -1436,7 +1477,7 @@ public:
                         break;
                 }
 
-                fresh = cxt.ast.new_type_clause(goal->impl.front());
+                fresh = cxt.ast.new_type_clause(first);
                 vector<type_struct*> impl(goal->impl.begin() + 1, goal->impl.end());
                 return cxt.ast.new_type_clause(goal->head, goal->cyck, move(impl), 1);
             }
