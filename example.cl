@@ -25,6 +25,8 @@ split(X, cons(def(X, T), Tail1), cons(T, Tail2), Tail3 ) :-
     split(X, Tail1, Tail2, Tail3).
 split(X, nil, nil, nil).
 
+#-----------------------------------------------------------------------------
+
 nat(zero).
 nat(succ(X)) :-
     nat(X).
@@ -32,8 +34,11 @@ nat(succ(X)) :-
 bool(true).
 bool(false).
 
+#-----------------------------------------------------------------------------
+# type inference 
+
 expr(var(X), cons(def(X, Type), nil), Type).
-expr(nat(X1), nil, nat) :-
+expr(nat(X), nil, nat) :-
     nat(X).
 expr(bool(X), nil, bool) :-
     bool(X).
@@ -59,4 +64,8 @@ expr(let(Var, Body, Rhs), Cxt, T2) :-
 :- expr(
   let(cast2, lam(f, lam(x, lam(y, app(app(var(f), var(x)), var(y))))), var(cast2)),
 Cxt, Typ).
+
+:- expr(lam(x, let(y, var(x), var(y))), C, T).
+
+:- expr(let(id, lam(x, var(x)), var(id)), C, T).
 

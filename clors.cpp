@@ -511,6 +511,7 @@ class type_show : public type_visitor {
     var_map tvar_map;
     bool debug;
     bool top;
+    bool constraint;
 
     void show_variable(type_variable *const t) {
         int const x {tvar_map.get(t)};
@@ -559,9 +560,12 @@ public:
 
     virtual void visit(type_attrvar *const t) override {
         show_variable(t->var);
-        /*if (t->goal != nullptr) {
+        if (!constraint && t->goal != nullptr) {
+            constraint = true;
             cout << "{";
+            int j = 0;
             for (auto i = t; i != nullptr; i = i->next) {
+                ++j;
                 assert(i->goal != nullptr);
                 show_struct(i->goal);
                 if (i->next != nullptr) {
@@ -569,7 +573,8 @@ public:
                 }
             }
             cout << "} ";
-        }*/
+            constraint = false;
+        }
     }
 
     virtual void visit(type_atom *const t) override {
@@ -581,7 +586,7 @@ public:
     }
 
     virtual void visit(type_clause *const t) override {
-        cout << t->id << ". ";
+        cout << t->id << ".\t";
         show_struct(t->head);
         IF_DEBUG(
             if (t->cyck.size() > 0) {
@@ -612,6 +617,7 @@ public:
 
     void operator() (type_expression *const t) {
         if (t != nullptr) {
+            constraint = false;
             top = true;
             t->accept(this);
         }
@@ -899,6 +905,7 @@ public:
             link(t1, t2, unify.unions);
         }
         virtual void visit(type_attrvar* const t2) override {
+            unify.deferred_goals.push_back(t2);
             t1->replace_with(t2, unify.unions);
         }
         virtual void visit(type_atom *const t2) override {
@@ -928,9 +935,12 @@ public:
         type_attrvar *t1;
     public:
         virtual void visit(type_variable *const t2) override {
+            unify.deferred_goals.push_back(t1);
             t2->replace_with(t1, unify.unions);
         }
         virtual void visit(type_attrvar* t2) override {
+            //unify.deferred_goals.push_back(t1);
+            //unify.deferred_goals.push_back(t2);
             link2(t1, t2, unify.unions);
             type_attrvar* i = t2;
             while (i->next != nullptr) {
@@ -1238,6 +1248,13 @@ private:
             type_expression *const u1 = find(tt.first);
             u2 = find(tt.second);
             todo.pop_back();
+
+            type_show ts;
+            ts(u1);
+            cout << " <> ";
+            ts(u2);
+            cout << "\n";
+
             if (u1 != u2) {
                 u1->accept(this);
             }
@@ -1259,11 +1276,11 @@ public:
         todo.clear();
         todo.push_back(make_pair(x, y));
 
-        //type_show ts;
-        //ts(x);
-        //cout << " <D> ";
-        //ts(y);
-        //cout << "\n";
+        type_show ts;
+        ts(x);
+        cout << " <D> ";
+        ts(y);
+        cout << "\n";
 
         return du();
     }
@@ -1399,6 +1416,7 @@ public:
                     fresh = cxt.inst.inst_rule(clause->head, clause->cyck, clause->impl, clause->id);
                     cxt.unify.unify_goal_rule(first, fresh);
                     vector<type_attrvar*> const& d = cxt.unify.get_deferred_goals();
+                    cout << "deferred goals: " << d.size() << endl;
                     vector<type_struct*> impl;
                     for (auto i : d) {
                         for (type_attrvar* a = i; i != nullptr; i = i->next) {
@@ -1426,6 +1444,7 @@ public:
                     fresh = cxt.ast.new_type_clause(first);
                     vector<type_attrvar*> const& d = cxt.unify.get_deferred_goals();
                     vector<type_struct*> impl;
+                    cout << "deferred goals: " << d.size() << endl;
                     for (auto i : d) {
                         for (type_attrvar* a = i; i != nullptr; i = i->next) {
                             IF_DEBUG(
@@ -1563,22 +1582,23 @@ public:
                     //cout << "PUSH" << endl;
                     or_stack.emplace_back(new unfolder(cxt, next_goal, depth));
                 } else {
-                    //cout << "EXCEED\n";
+                    cout << "EXCEED\n";
                     or_stack.pop_back(); 
-                    //cout << "[" << or_stack.size() << "]\n";
+                    cout << "[" << or_stack.size() << "]\n";
                     while (!or_stack.empty() && or_stack.back()->at_end()) {
                         or_stack.pop_back();
                     }
                 }
             } else {
-                //cout << "FAIL\n";
+                cout << "FAIL\n";
                 or_stack.pop_back(); 
-                //cout << "[" << or_stack.size() << "]\n";
+                cout << "[" << or_stack.size() << "]\n";
                 while (!or_stack.empty() && or_stack.back()->at_end()) {
                     or_stack.pop_back();
                 }
             }
         }
+        cout << "FINISH\n";
         or_stack.clear();
         cxt.unify.backtrack(trail_checkpoint);
         cxt.ast.backtrack(env_checkpoint);
@@ -1816,7 +1836,8 @@ public:
                 }
             }
             cout << "." << endl << endl;
-            for (int i = 0; i < count; ++i) {
+            //for (int i = 0; i < count; ++i) {
+            for (int i = count - 1; i < count; ++i) {
                 solver solve(names, env, ast.new_type_clause(ast.new_type_struct(
                     names.find("yes")->second, gv(goal), false), set<type_variable*> {}, goal), i + 1);
                 answer = solve.get();
