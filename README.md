@@ -5,9 +5,9 @@ Clors logic language. A Horn clause interpreter with sound unification (post uni
 
 The complete inference is based around implementing disequality by consraint propagation which is already implemented. The negation-elimination, such that 'not member' is constructed from 'member' by term rewriting is work in progress, and my current understanding is that this requires some kind of type inference.
 
-Here are a couple of example programs:
+##Examples##
 
-##Membership Test##
+####Membership Test####
 Input
 ```
 member(Key, cons(Head, Tail), Val) :-
@@ -25,7 +25,7 @@ PROOF:
 0.	dif(Key1 = b, K1 = a).
 1.	member(Key2 = b, cons(def(Key2 = b, Val2 = y), Tail2 = cons(def(c, x), nil)), just(Val2 = y)) [Key2, Val2].
 ```
-##Commutativity of a Heyting algebra##
+####Commutativity of a Heyting algebra####
 Input
 ```
 # conjunction as meet
