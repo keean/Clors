@@ -18,6 +18,8 @@ member(Key, nil, nothing).
 ```
 Output
 ```
+DEPTH 3 ELAPSED TIME: 44us
+
 PROOF:
 3.	member(Key1 = b, cons(def(K1 = a, V1 = z), Tail1 = cons(def(b, y), cons(def(c, x), nil))), Val1 = just(y)) :-
 	dif(Key1 = b, K1 = a),
